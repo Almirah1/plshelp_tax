@@ -390,6 +390,9 @@ IMPORTANT: Respond ONLY with a valid JSON array, no markdown, no backticks, no e
     throw new Error("Could not parse API response (HTTP " + response.status + "). Check your API key in Settings.");
   }
   
+  console.log("classifyExpenses API response status:", response.status, "ok:", response.ok);
+  console.log("classifyExpenses API data:", JSON.stringify(data).slice(0, 500));
+  
   if (!response.ok || data.error) {
     const msg = (data && data.error) ? (data.error.message || data.error.type || JSON.stringify(data.error)) : ("HTTP " + response.status);
     throw new Error("Claude API error: " + msg);
@@ -1993,6 +1996,70 @@ function GSTView({ invoices, expenses, gstRegistered, settings }) {
 }
 
 // ─── SETTINGS ───
+function TestAIButton() {
+  const [status, setStatus] = useState(null);
+  
+  const testConnection = async () => {
+    const key = getAnthropicKey();
+    if (!key) {
+      setStatus({ ok: false, msg: "No API key set. Enter your key above first." });
+      return;
+    }
+    setStatus({ ok: null, msg: "Testing..." });
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": key,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true"
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 50,
+          messages: [{ role: "user", content: "Reply with just the word: OK" }],
+        }),
+      });
+      const data = await response.json();
+      console.log("Test API response:", JSON.stringify(data));
+      
+      if (!response.ok) {
+        setStatus({ ok: false, msg: "API error " + response.status + ": " + (data.error?.message || JSON.stringify(data)) });
+        return;
+      }
+      if (data.content && Array.isArray(data.content)) {
+        const text = data.content.map(c => c.text || "").join("");
+        setStatus({ ok: true, msg: "Connected! Model replied: " + text });
+      } else {
+        setStatus({ ok: false, msg: "Unexpected response shape: " + JSON.stringify(data).slice(0, 300) });
+      }
+    } catch (err) {
+      console.error("Test API error:", err);
+      setStatus({ ok: false, msg: "Connection failed: " + err.message });
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={testConnection} style={{ ...styles.secondaryBtn, display: "flex", gap: 6, alignItems: "center" }}>
+        ⚡ Test AI Connection
+      </button>
+      {status && (
+        <p style={{
+          fontSize: 12, marginTop: 8, padding: "8px 12px", borderRadius: 6,
+          background: status.ok === true ? "#ecfdf5" : status.ok === false ? "#fef2f2" : "#f3f4f6",
+          border: "1px solid " + (status.ok === true ? "#a7f3d0" : status.ok === false ? "#fecaca" : "#e5e5e5"),
+          color: status.ok === true ? "#065f46" : status.ok === false ? "#991b1b" : "#374151",
+          wordBreak: "break-all",
+        }}>
+          {status.msg}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function SettingsView({ settings, setSettings, invoices, expenses, setInvoices, setExpenses, syncStatus, lastSynced, refreshFromCloud, supabase, pin, onDisconnect }) {
   const update = (key, value) => setSettings(s => ({ ...s, [key]: value }));
   const [importStatus, setImportStatus] = useState("");
@@ -2159,7 +2226,7 @@ function SettingsView({ settings, setSettings, invoices, expenses, setInvoices, 
         </div>
 
         <div style={styles.settingsCard}>
-          <h3 style={styles.settingsCardTitle}>🤖 AI Features</h3>
+          <h3 style={styles.settingsCardTitle}>🤖 AI Features <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400 }}>v3</span></h3>
           <p style={styles.settingsNote}>Enter your Anthropic API key to enable AI-powered payslip reading and expense classification. Get one at console.anthropic.com.</p>
           <label style={{ ...styles.formLabel, marginTop: 10 }}>
             Anthropic API Key
@@ -2171,9 +2238,10 @@ function SettingsView({ settings, setSettings, invoices, expenses, setInvoices, 
               style={{ ...styles.input, fontFamily: "monospace", fontSize: 12 }}
             />
           </label>
-          <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>
-            Stored locally on this device only. Used for payslip PDF reading and credit card expense classification.
+          <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 8px" }}>
+            Stored locally on this device only. Key starts with: {getAnthropicKey() ? getAnthropicKey().slice(0, 10) + "..." : "(not set)"}
           </p>
+          <TestAIButton />
         </div>
 
         <div style={{ ...styles.settingsCard, gridColumn: "1 / -1" }}>
