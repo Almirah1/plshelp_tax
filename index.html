@@ -350,15 +350,19 @@ function parseDate(str) {
 
 // ─── AI EXPENSE CLASSIFICATION ───
 async function classifyExpenses(transactions, anthropicKey) {
+  if (!anthropicKey) throw new Error("No Anthropic API key set. Go to Settings → AI Features and add your key.");
+  
   const txList = transactions.map((t, i) => `${i + 1}. ${t.date} | ${t.description} | $${Math.abs(t.amount).toFixed(2)}`).join('\n');
   
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 4000,
-      system: `You are a New Zealand tax expert classifying credit card expenses for a sole trader who is a data analyst contractor. 
+  let response;
+  try {
+    response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4000,
+        system: `You are a New Zealand tax expert classifying credit card expenses for a sole trader who is a data analyst contractor. 
 
 For each transaction, determine:
 1. "claimable": true/false - whether it's a legitimate business expense for a data analyst
@@ -372,14 +376,37 @@ Common business expenses for data analysts: software (Tableau, Power BI, Excel, 
 Personal expenses NOT claimable: groceries, entertainment, personal clothing, personal dining, personal insurance, personal subscriptions (Netflix etc), personal transport.
 
 IMPORTANT: Respond ONLY with a valid JSON array, no markdown, no backticks, no explanation. Each object must have keys: index (1-based), claimable, gst_claimable, category, confidence, note.`,
-      messages: [{ role: "user", content: `Classify these credit card transactions for a NZ sole trader data analyst:\n\n${txList}` }],
-    }),
-  });
+        messages: [{ role: "user", content: `Classify these credit card transactions for a NZ sole trader data analyst:\n\n${txList}` }],
+      }),
+    });
+  } catch (fetchErr) {
+    throw new Error("Network error calling Claude API: " + fetchErr.message);
+  }
   
-  const data = await response.json();
+  let data;
+  try {
+    data = await response.json();
+  } catch (jsonErr) {
+    throw new Error("Could not parse API response (HTTP " + response.status + "). Check your API key in Settings.");
+  }
+  
+  if (!response.ok || data.error) {
+    const msg = (data && data.error) ? (data.error.message || data.error.type || JSON.stringify(data.error)) : ("HTTP " + response.status);
+    throw new Error("Claude API error: " + msg);
+  }
+  
+  if (!data || !data.content || !Array.isArray(data.content)) {
+    throw new Error("Unexpected API response. Got: " + JSON.stringify(data).slice(0, 200));
+  }
+  
   const text = data.content.map(c => c.text || "").join("");
   const cleaned = text.replace(/```json|```/g, "").trim();
-  return JSON.parse(cleaned);
+  
+  try {
+    return JSON.parse(cleaned);
+  } catch (parseErr) {
+    throw new Error("AI returned invalid JSON: " + cleaned.slice(0, 200));
+  }
 }
 
 // ─── MAIN APP ───
@@ -612,8 +639,8 @@ function NZTaxTracker() {
       <header style={styles.header}>
         <div style={styles.headerInner}>
           <div>
-            <h1 style={styles.headerTitle}>pls help Tax</h1>
-            <p style={styles.headerSub}>Sole Trader/p>
+            <h1 style={styles.headerTitle}>TaxTrack NZ</h1>
+            <p style={styles.headerSub}>Sole Trader · Data Analyst · Karmly Contractor</p>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {syncIndicator}
@@ -976,13 +1003,17 @@ function BreakdownRow({ label, amount, color, total, isRefund }) {
 
 // ─── AI PAYSLIP EXTRACTION ───
 async function extractPayslipData(base64Data, anthropicKey) {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 2000,
-      system: `You are an expert at reading NZ payslips and contractor payment remittances from platforms like Karmly. Extract payment information from the PDF provided.
+  if (!anthropicKey) throw new Error("No Anthropic API key set. Go to Settings → AI Features and add your key.");
+  
+  let response;
+  try {
+    response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 2000,
+        system: `You are an expert at reading NZ payslips and contractor payment remittances from platforms like Karmly. Extract payment information from the PDF provided.
 
 Return ONLY a valid JSON object (no markdown, no backticks) with this structure:
 {
@@ -1009,23 +1040,46 @@ Rules:
 - Dates should be the payment date, or end of pay period if payment date isn't visible
 - If you can't find clear payment data, return: {"payments": [], "payer": "", "notes": "Could not extract payment data - please describe what you see"}
 - For Karmly specifically: look for invoice amounts, contract rates, hours worked, and payment totals`,
-      messages: [{
-        role: "user",
-        content: [
-          {
-            type: "document",
-            source: { type: "base64", media_type: "application/pdf", data: base64Data }
-          },
-          { type: "text", text: "Extract all payment/income information from this payslip or payment remittance. This is for a NZ sole trader data analyst contracting through Karmly." }
-        ]
-      }],
-    }),
-  });
+        messages: [{
+          role: "user",
+          content: [
+            {
+              type: "document",
+              source: { type: "base64", media_type: "application/pdf", data: base64Data }
+            },
+            { type: "text", text: "Extract all payment/income information from this payslip or payment remittance. This is for a NZ sole trader data analyst contracting through Karmly." }
+          ]
+        }],
+      }),
+    });
+  } catch (fetchErr) {
+    throw new Error("Network error calling Claude API: " + fetchErr.message);
+  }
 
-  const data = await response.json();
+  let data;
+  try {
+    data = await response.json();
+  } catch (jsonErr) {
+    throw new Error("Could not parse API response (HTTP " + response.status + "). Check your API key in Settings.");
+  }
+
+  if (!response.ok || data.error) {
+    const msg = (data && data.error) ? (data.error.message || data.error.type || JSON.stringify(data.error)) : ("HTTP " + response.status);
+    throw new Error("Claude API error: " + msg);
+  }
+  
+  if (!data || !data.content || !Array.isArray(data.content)) {
+    throw new Error("Unexpected API response. Got: " + JSON.stringify(data).slice(0, 200));
+  }
+  
   const text = data.content.map(c => c.text || "").join("");
   const cleaned = text.replace(/```json|```/g, "").trim();
-  return JSON.parse(cleaned);
+  
+  try {
+    return JSON.parse(cleaned);
+  } catch (parseErr) {
+    throw new Error("AI returned invalid JSON: " + cleaned.slice(0, 200));
+  }
 }
 
 // ─── INCOME VIEW ───
